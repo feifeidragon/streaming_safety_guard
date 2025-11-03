@@ -8,6 +8,8 @@ from tqdm import tqdm
 from typing import List, Dict
 import pandas as pd
 from datetime import datetime
+import sys
+import os
 
 from core.streaming_guard import StreamingGuard
 from utils.metrics import SafetyMetrics
@@ -15,9 +17,70 @@ from utils.metrics import SafetyMetrics
 
 def load_config(config_path: str = "config/config.yaml") -> dict:
     """加载配置文件"""
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-    return config
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+
+        # 验证必需的配置项
+        model_path = config.get('model', {}).get('local_model_path')
+        if not model_path:
+            logger.error("local_model_path not found in config!")
+            logger.info("Please set model.local_model_path in config/config.yaml")
+            sys.exit(1)
+
+        # 检查模型路径是否存在
+        if not os.path.exists(model_path):
+            logger.error(f"Model path does not exist: {model_path}")
+            sys.exit(1)
+
+        # 合并配置，适配StreamingGuard的参数
+        merged_config = {
+            # 模型配置
+            'model_path': model_path,  # StreamingGuard使用model_path
+            'device': config['model'].get('device', 'cuda' if torch.cuda.is_available() else 'cpu'),
+            'use_fp16': config['model'].get('torch_dtype', 'float16') == 'float16',
+            'max_length': config['model'].get('max_length', 2048),
+
+            # 安全检测器配置
+            'detector_path': config.get('safety_detector', {}).get('checkpoint_path'),
+            'hidden_size': config.get('safety_detector', {}).get('hidden_size', 768),
+
+            # 路由器配置
+            'router_path': None,  # 暂时没有预训练路由器
+
+            # 隐藏状态分析器配置
+            'latent_analyzer': {
+                'layer_indices': config.get('latent_analysis', {}).get('layer_indices', [-1, -2, -3]),
+                'aggregation': config.get('latent_analysis', {}).get('aggregation', 'weighted'),
+                'risk_threshold': config.get('latent_analysis', {}).get('risk_threshold', 0.6),
+                'max_history': 20
+            },
+
+            # 缓冲区配置
+            'buffer_size': config.get('streaming', {}).get('window_size', 20),
+            'window_size': config.get('streaming', {}).get('buffer_size', 10),
+
+            # 检测配置
+            'check_interval': config.get('streaming', {}).get('check_interval', 5),
+            'risk_threshold': config.get('safety_detector', {}).get('threshold', 0.7),
+            'max_tokens': config.get('model', {}).get('max_length', 512),
+
+            # 生成配置
+            'temperature': config.get('model', {}).get('temperature', 0.7),
+            'top_p': config.get('model', {}).get('top_p', 0.9),
+        }
+
+        logger.info(f"配置加载成功: {config_path}")
+        return merged_config
+
+    except FileNotFoundError:
+        logger.error(f"Config file not found: {config_path}")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error loading config: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        sys.exit(1)
 
 
 def load_dataset(file_path: str) -> List[Dict]:
@@ -47,18 +110,18 @@ def batch_evaluate(guard: StreamingGuard, dataset: List[Dict], output_dir: str =
 
         try:
             # 生成并检测
-            result = guard.generate_with_guard(
+            result = guard.generate_safe(
                 prompt=prompt,
                 max_new_tokens=256
             )
 
             # 预测标签（如果被拦截则为1，否则为0）
-            pred_label = 1 if result['is_blocked'] else 0
+            pred_label = 1 if result['blocked'] else 0
 
             # 获取风险得分
             risk_score = 0.0
             if result['block_reason']:
-                risk_score = result['block_reason']['final_score']
+                risk_score = result['block_reason']['risk_score']
 
             y_true.append(true_label)
             y_pred.append(pred_label)
@@ -72,7 +135,7 @@ def batch_evaluate(guard: StreamingGuard, dataset: List[Dict], output_dir: str =
                 'true_label': true_label,
                 'pred_label': pred_label,
                 'risk_score': risk_score,
-                'is_blocked': result['is_blocked'],
+                'blocked': result['blocked'],
                 'num_tokens': result['num_tokens'],
                 'generation_time': result['generation_time']
             }
@@ -151,12 +214,19 @@ def main():
     # 加载配置
     config = load_config()
 
-    # 加载数据集
-    dataset_path = config['dataset']['train_path']
+    logger.info(f"模型路径: {config['model_path']}")
+    logger.info(f"设备: {config['device']}")
+    logger.info(f"使用FP16: {config['use_fp16']}")
+
+    # 加载数据集 - 需要从原始config文件中读取dataset路径
+    with open("config/config.yaml", 'r', encoding='utf-8') as f:
+        original_config = yaml.safe_load(f)
+
+    dataset_path = original_config['dataset']['train_path']
     dataset = load_dataset(dataset_path)
 
     # 限制样本数量（如果配置了）
-    max_samples = config['dataset'].get('max_samples')
+    max_samples = original_config['dataset'].get('max_samples')
     if max_samples and max_samples < len(dataset):
         dataset = dataset[:max_samples]
         logger.info(f"限制评估样本数量为: {max_samples}")
@@ -165,10 +235,13 @@ def main():
     logger.info("初始化安全守卫系统...")
     guard = StreamingGuard(config)
 
+    logger.info("系统初始化完成！")
+
     # 批量评估
     results, metrics = batch_evaluate(guard, dataset)
 
     logger.info("批量评估完成！")
 
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    main()
