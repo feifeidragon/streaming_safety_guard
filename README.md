@@ -73,7 +73,7 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/yourusername/streaming-safety-guard.git
+
 cd streaming-safety-guard
 
 # 2. 创建虚拟环境
@@ -84,4 +84,5 @@ conda activate safety_guard
 pip install -r requirements.txt
 
 # 4. 配置模型路径
+
 # 编辑 config/config.yaml，设置本地模型路径
