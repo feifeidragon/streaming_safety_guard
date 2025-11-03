@@ -87,51 +87,60 @@ def load_config(config_path: str = "config/config.yaml") -> dict:
         sys.exit(1)
 
 
-def interactive_mode(guard: StreamingGuard, config: dict):
-    """交互模式"""
-    print("\n进入交互模式，输入 'quit' 或 'exit' 退出\n")
+def interactive_mode(guard, config=None):
+    """交互式安全生成模式
 
-    # 从配置获取生成参数
-    temperature = config.get('temperature', 0.7)
-    top_p = config.get('top_p', 0.9)
+    Args:
+        guard: StreamingGuard 实例
+        config: 配置字典（可选），可包含 max_new_tokens, temperature 等参数
+    """
+    print("\n=== 交互式安全生成模式 ===")
+    print("输入 'quit' 或 'exit' 退出")
+
+    # 从 config 中获取默认参数（如果提供）
+    default_max_tokens = config.get('max_new_tokens', 512) if config else 512
+    default_temperature = config.get('temperature', 0.7) if config else 0.7
 
     while True:
         try:
             # 获取用户输入
-            prompt = input("请输入提示词 > ").strip()
+            user_input = input("\n请输入提示词 > ").strip()
 
-            if prompt.lower() in ['quit', 'exit', 'q']:
-                print("\n感谢使用！再见！")
+            # 检查退出命令
+            if user_input.lower() in ['quit', 'exit', 'q']:
+                print("退出交互模式")
                 break
 
-            if not prompt:
+            # 验证输入
+            if not user_input:
+                print("⚠️  错误: 输入不能为空，请重新输入")
                 continue
 
-            print("\n[生成中...]\n")
+            # 确保是字符串类型
+            prompt = str(user_input)
 
-            # 定义回调函数，实时输出
-            def callback(token_text):
-                print(token_text, end='', flush=True)
+            print(f"\n[生成中...] (max_tokens={default_max_tokens}, temp={default_temperature})")
 
-            # 生成
+            # 调用生成
             result = guard.generate_safe(
                 prompt=prompt,
-                max_new_tokens=100,
-                temperature=temperature,
-                top_p=top_p,
-                top_k=50,
-                callback=callback
+                max_new_tokens=default_max_tokens,
+                temperature=default_temperature
             )
 
-            print("\n")  # 换行
-
             # 显示结果
-            if result['blocked']:
-                print(f"\n⚠️  内容已被拦截!")
-                print(f"原因: {result['block_reason']}")
-                print(f"在第 {result['block_step']} 步被拦截")
-            else:
-                print(f"\n✓ 生成完成")
+            print("\n" + "=" * 50)
+            print("生成结果:")
+            print(result)
+            print("=" * 50)
+
+        except KeyboardInterrupt:
+            print("\n\n检测到 Ctrl+C，退出...")
+            break
+        except Exception as e:
+            logger.error(f"生成错误: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            print(f"\n❌ 错误: {e}")
 
             # 显示统计
             print(f"\n统计信息:")
