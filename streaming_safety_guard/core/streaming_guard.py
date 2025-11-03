@@ -299,6 +299,18 @@ class StreamingGuard:
         self.latent_analyzer.reset()
 
         # 编码输入
+        if not isinstance(prompt, str):
+            if prompt is None:
+                raise ValueError("prompt 不能为 None")
+            elif isinstance(prompt, (list, dict)):
+                raise ValueError(f"prompt 必须是字符串，但收到了 {type(prompt)}")
+            else:
+                prompt = str(prompt)
+
+        # 额外检查：确保 prompt 不是空字符串
+        if not prompt.strip():
+            raise ValueError("prompt 不能为空字符串")
+
         inputs = self.tokenizer(prompt, return_tensors='pt').to(self.device)
         input_ids = inputs['input_ids']
 
